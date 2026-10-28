@@ -6,17 +6,23 @@ const fs = require('fs');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server);
+const io = new Server(server, {
+  // Vercel doesn't support WebSockets on serverless — allow polling fallback
+  transports: ['polling', 'websocket'],
+  cors: { origin: '*' }
+});
 
 const PORT = process.env.PORT || 3000;
-const DATA_FILE = path.join(__dirname, 'data', 'gym_data.json');
+// Vercel serverless functions have a read-only filesystem except /tmp
+const DATA_DIR = process.env.VERCEL ? '/tmp' : path.join(__dirname, 'data');
+const DATA_FILE = path.join(DATA_DIR, 'gym_data.json');
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Ensure data directory exists
-if (!fs.existsSync(path.join(__dirname, 'data'))) {
-  fs.mkdirSync(path.join(__dirname, 'data'), { recursive: true });
+if (!fs.existsSync(DATA_DIR)) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
 // Helper to generate readable 6-character alphanumeric code
@@ -640,11 +646,17 @@ io.on('connection', (socket) => {
   });
 });
 
-server.listen(PORT, () => {
-  console.log(`===============================================`);
-  console.log(` MAIT Gym Slot Booking System running on port ${PORT}`);
-  console.log(` Local URL: http://localhost:${PORT}`);
-  console.log(` Member portal: http://localhost:${PORT}`);
-  console.log(` Staff portal:  http://localhost:${PORT}/staff.html`);
-  console.log(`===============================================`);
-});
+// Export for Vercel serverless (Socket.IO falls back to HTTP long-polling on Vercel)
+// Run directly via `node server.js` for local development with full WebSocket support
+if (require.main === module) {
+  server.listen(PORT, () => {
+    console.log(`===============================================`);
+    console.log(` MAIT Gym Slot Booking System running on port ${PORT}`);
+    console.log(` Local URL: http://localhost:${PORT}`);
+    console.log(` Member portal: http://localhost:${PORT}`);
+    console.log(` Staff portal:  http://localhost:${PORT}/staff.html`);
+    console.log(`===============================================`);
+  });
+}
+
+module.exports = server;
