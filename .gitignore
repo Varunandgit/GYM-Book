@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+
+# Runtime data
+data/
+
+# Environment
+.env
+.DS_Store
+Thumbs.db
+
+# Presentation artifacts from previous tasks
+*.pptx
+*.pdf
+slide_images/
+assets/
+build_presentation.py
+generate_visual_assets.py
+presentation_viewer.html
+test_bg.pptx
+test_ppt.ps1
+export_pdf.ps1
+export_slides.ps1

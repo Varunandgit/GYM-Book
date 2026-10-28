@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Staff Door Terminal - MAIT Gym Slot Booking</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/socket.io/socket.io.js"></script>
+</head>
+<body>
+
+  <!-- Header -->
+  <header>
+    <div class="header-container">
+      <div>
+        <h1>🚪 Staff Door Terminal - MAIT Gym</h1>
+        <div class="subtitle">Member Verification &amp; Check-in &bull; Real-time Mat Tracking</div>
+      </div>
+      <div class="nav-links">
+        <a href="/">➔ Member Booking Portal</a>
+        <a href="/staff.html" class="active">Staff Door Check-in</a>
+      </div>
+    </div>
+  </header>
+
+  <!-- Live Status Bar -->
+  <div class="live-status-bar">
+    <span class="live-indicator"></span>
+    <span id="socket-status">Live Connected to Server Door Terminal</span>
+  </div>
+
+  <div class="container">
+
+    <!-- Staff Instructions -->
+    <div class="demo-banner">
+      <strong>Staff Door Duties:</strong>
+      When a member arrives at the gym door, ask for their <strong>Booking Code</strong> (e.g. <code>GYM-1000</code>).
+      Enter it below to immediately verify and check them in for their session. You can also view the full 20-mat roster and waitlist for any day and hourly slot.
+    </div>
+
+    <!-- Alert Box -->
+    <div id="alert-box" style="display: none;"></div>
+
+    <!-- Door Fast Check-In Panel -->
+    <div class="panel">
+      <h2>
+        <span>1. Fast Door Code Verification</span>
+        <span class="badge badge-green">Live Scanner</span>
+      </h2>
+
+      <form id="checkin-form" style="display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap;">
+        <div style="flex: 1; min-width: 250px;">
+          <label for="checkin-code">Enter Member Code (Shown on their phone):</label>
+          <input 
+            type="text" 
+            id="checkin-code" 
+            placeholder="e.g. GYM-1000 or GYM-A7B2" 
+            required 
+            style="font-family: monospace; font-size: 18px; font-weight: bold; text-transform: uppercase;"
+          >
+        </div>
+        <button type="submit" id="checkin-btn" class="btn btn-primary" style="padding: 10px 24px;">
+          Check Member In ➔
+        </button>
+      </form>
+
+      <!-- Live Check-In Success/Failure Card -->
+      <div id="checkin-result" style="display: none; margin-top: 15px;"></div>
+    </div>
+
+    <!-- Session Roster Panel -->
+    <div class="panel">
+      <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; border-bottom: 2px solid #e2e8f0; padding-bottom: 8px; margin-bottom: 14px;">
+        <h2 style="border-bottom: none; margin-bottom: 0; padding-bottom: 0;">
+          2. Session Roster &amp; Mat Allocations (20 Mats Max)
+        </h2>
+        <div>
+          <button class="btn btn-secondary btn-sm" onclick="resetDemoData()">Reset Demo Data</button>
+        </div>
+      </div>
+
+      <div style="margin-bottom: 14px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+        <div>
+          <label for="day-select" style="font-size: 12px; margin-bottom: 2px;">Select Day:</label>
+          <select id="day-select" style="width: auto; min-width: 170px;" onchange="handleDayChange()">
+            <option value="">Loading days...</option>
+          </select>
+        </div>
+
+        <div>
+          <label for="session-select" style="font-size: 12px; margin-bottom: 2px;">Hourly Time Slot:</label>
+          <select id="session-select" style="width: auto; min-width: 260px;" onchange="loadSelectedSessionRoster()">
+            <option value="">Loading sessions...</option>
+          </select>
+        </div>
+
+        <span id="session-summary-badge" class="badge badge-blue" style="margin-top: 16px;"></span>
+      </div>
+
+      <!-- Confirmed Mat Attendees Table -->
+      <h3 style="font-size: 14px; margin-top: 15px; margin-bottom: 6px; color: #2d3748;">
+        Confirmed Mat Reservations (Strictly 20 Mats Max):
+      </h3>
+      <div class="table-responsive">
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 70px;">Mat #</th>
+              <th>Member Name</th>
+              <th>Email</th>
+              <th>Booking Code</th>
+              <th>Status</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="roster-tbody">
+            <tr>
+              <td colspan="6" style="text-align: center; color: #718096; padding: 20px;">
+                Select a session to display attendees.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Waitlist Table for Selected Session -->
+      <h3 style="font-size: 14px; margin-top: 25px; margin-bottom: 6px; color: #7b341e;">
+        Waitlist Queue (Promoted automatically when any confirmed member cancels):
+      </h3>
+      <div class="table-responsive">
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 70px;">Queue #</th>
+              <th>Member Name</th>
+              <th>Email</th>
+              <th>Joined At</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="waitlist-tbody">
+            <tr>
+              <td colspan="5" style="text-align: center; color: #718096; padding: 15px;">
+                No members currently waiting.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+    </div>
+
+    <!-- Footer -->
+    <footer>
+      <p>MAIT Gym Staff Terminal &bull; Automatic Concurrency Handled &bull; Server-Side Verification</p>
+    </footer>
+
+  </div>
+
+  <script>
+    let staffDays = [];
+    let staffSessions = [];
+    let selectedDate = null;
+    let selectedSessionId = null;
+
+    const socket = io();
+
+    socket.on('connect', () => {
+      document.getElementById('socket-status').innerText = 'Live Connected to Server Door Terminal';
+      document.getElementById('socket-status').style.color = '#2c5282';
+    });
+
+    socket.on('disconnect', () => {
+      document.getElementById('socket-status').innerText = 'Connecting to server...';
+      document.getElementById('socket-status').style.color = '#9b1c1c';
+    });
+
+    // Real-time server state sync
+    socket.on('state_update', () => {
+      fetchStaffData();
+    });
+
+    socket.on('member_checked_in', (data) => {
+      showAlert(`✓ Check-in event: ${data.name} checked in for Mat #${data.matNumber} (${data.sessionDay || ''} ${data.sessionTime || ''})`, 'info');
+      fetchStaffData();
+    });
+
+    socket.on('member_promoted', (data) => {
+      showAlert(`⚡ Waitlist Promotion: ${data.name} was auto-promoted to Mat #${data.matNumber} for ${data.sessionDay} at ${data.sessionTime}!`, 'info');
+      fetchStaffData();
+    });
+
+    // Fetch initial data
+    async function fetchStaffData() {
+      try {
+        const [daysRes, sessRes] = await Promise.all([
+          fetch('/api/days'),
+          fetch('/api/staff/sessions')
+        ]);
+        staffDays = await daysRes.json();
+        staffSessions = await sessRes.json();
+
+        if (!selectedDate && staffDays.length > 0) {
+          selectedDate = staffDays[0].date;
+        }
+
+        populateDayDropdown();
+        populateSessionDropdown();
+        loadSelectedSessionRoster();
+      } catch (err) {
+        console.error('Failed to load staff data', err);
+      }
+    }
+
+    function populateDayDropdown() {
+      const select = document.getElementById('day-select');
+      select.innerHTML = staffDays.map(d => `
+        <option value="${d.date}" ${d.date === selectedDate ? 'selected' : ''}>
+          ${d.label}
+        </option>
+      `).join('');
+    }
+
+    function handleDayChange() {
+      selectedDate = document.getElementById('day-select').value;
+      populateSessionDropdown();
+      loadSelectedSessionRoster();
+    }
+
+    function populateSessionDropdown() {
+      const select = document.getElementById('session-select');
+      const daySessions = staffSessions.filter(s => s.date === selectedDate);
+
+      if (daySessions.length === 0) {
+        select.innerHTML = '<option value="">No sessions on this day</option>';
+        selectedSessionId = null;
+        return;
+      }
+
+      // Keep previous slot or select first
+      const exists = daySessions.some(s => s.id === selectedSessionId);
+      if (!exists) {
+        selectedSessionId = daySessions[0].id;
+      }
+
+      select.innerHTML = daySessions.map(s => `
+        <option value="${s.id}" ${s.id === selectedSessionId ? 'selected' : ''}>
+          ${s.time} - ${s.title} (${s.bookings.length}/20 Booked)
+        </option>
+      `).join('');
+    }
+
+    function loadSelectedSessionRoster() {
+      const select = document.getElementById('session-select');
+      selectedSessionId = select.value;
+
+      const session = staffSessions.find(s => s.id === selectedSessionId);
+      if (!session) return;
+
+      const badge = document.getElementById('session-summary-badge');
+      badge.innerText = `${session.bookings.length} / 20 Confirmed Mats | ${session.waitlist.length} on Waitlist`;
+      badge.className = session.bookings.length >= 20 ? 'badge badge-red' : 'badge badge-green';
+
+      // Confirmed Roster
+      const tbody = document.getElementById('roster-tbody');
+      if (session.bookings.length === 0) {
+        tbody.innerHTML = `
+          <tr>
+            <td colspan="6" style="text-align: center; color: #718096; padding: 20px;">
+              No bookings yet for this session. All 20 mats are free.
+            </td>
+          </tr>
+        `;
+      } else {
+        const sorted = [...session.bookings].sort((a, b) => a.matNumber - b.matNumber);
+
+        tbody.innerHTML = sorted.map(b => {
+          const isCheckedIn = b.checkedIn;
+          const timeStr = b.checkedInAt ? new Date(b.checkedInAt).toLocaleTimeString() : '';
+
+          return `
+            <tr style="${isCheckedIn ? 'background-color: #f0fff4;' : ''}">
+              <td><strong>Mat ${b.matNumber}</strong></td>
+              <td>${b.name}</td>
+              <td style="color: #718096;">${b.email}</td>
+              <td><span class="code-font">${b.code}</span></td>
+              <td>
+                <span class="badge ${isCheckedIn ? 'badge-blue' : 'badge-green'}">
+                  ${isCheckedIn ? `✓ Checked In (${timeStr})` : 'Confirmed'}
+                </span>
+              </td>
+              <td>
+                ${isCheckedIn ? 
+                  `<span style="color: #2b6cb0; font-size: 12px; font-weight: bold;">Verified</span>` :
+                  `<button class="btn btn-primary btn-sm" onclick="checkInByCode('${b.code}')">Check In</button>`
+                }
+              </td>
+            </tr>
+          `;
+        }).join('');
+      }
+
+      // Waitlist Table
+      const wlBody = document.getElementById('waitlist-tbody');
+      if (session.waitlist.length === 0) {
+        wlBody.innerHTML = `
+          <tr>
+            <td colspan="5" style="text-align: center; color: #718096; padding: 15px;">
+              No members waiting on waitlist.
+            </td>
+          </tr>
+        `;
+      } else {
+        wlBody.innerHTML = session.waitlist.map((w, index) => `
+          <tr>
+            <td><strong>#${index + 1}</strong></td>
+            <td>${w.name}</td>
+            <td style="color: #718096;">${w.email}</td>
+            <td>${new Date(w.joinedAt).toLocaleTimeString()}</td>
+            <td><span class="badge badge-orange">Waiting in Queue</span></td>
+          </tr>
+        `).join('');
+      }
+    }
+
+    // Check in by code from form
+    document.getElementById('checkin-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const codeInput = document.getElementById('checkin-code');
+      const code = codeInput.value.trim().toUpperCase();
+      if (!code) return;
+
+      await executeCheckIn(code);
+      codeInput.value = '';
+      codeInput.focus();
+    });
+
+    // Check in by button in roster table
+    async function checkInByCode(code) {
+      await executeCheckIn(code);
+    }
+
+    async function executeCheckIn(code) {
+      const resultBox = document.getElementById('checkin-result');
+      resultBox.style.display = 'block';
+      resultBox.innerHTML = '<div class="alert alert-info">Verifying booking code with server...</div>';
+
+      try {
+        const res = await fetch('/api/checkin', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code })
+        });
+
+        const data = await res.json();
+
+        if (!res.ok) {
+          resultBox.innerHTML = `
+            <div class="alert alert-danger" style="margin-bottom: 0;">
+              <strong>Check-in Denied:</strong> ${data.error}
+            </div>
+          `;
+          return;
+        }
+
+        const b = data.booking;
+        resultBox.innerHTML = `
+          <div class="alert alert-success" style="margin-bottom: 0;">
+            <h3 style="font-size: 16px; margin-bottom: 4px;">✓ MEMBER CHECK-IN SUCCESSFUL</h3>
+            <div style="font-size: 14px;">
+              <strong>Name:</strong> ${b.name} &bull; 
+              <strong>Allocated Mat:</strong> Mat #${b.matNumber} &bull; 
+              <strong>Session:</strong> ${data.sessionDay || ''} at ${data.sessionTime} &bull; 
+              <strong>Code:</strong> ${b.code}
+            </div>
+          </div>
+        `;
+
+        showAlert(`Checked in ${b.name} to Mat #${b.matNumber}`, 'success');
+        fetchStaffData();
+
+      } catch (err) {
+        resultBox.innerHTML = `
+          <div class="alert alert-danger" style="margin-bottom: 0;">
+            <strong>Network error:</strong> ${err.message}
+          </div>
+        `;
+      }
+    }
+
+    // Reset Demo Data
+    async function resetDemoData() {
+      if (!confirm('Reset all sessions to sample seed data?')) return;
+      try {
+        const res = await fetch('/api/reset', { method: 'POST' });
+        const data = await res.json();
+        showAlert(data.message, 'info');
+        fetchStaffData();
+      } catch (err) {
+        showAlert('Reset error: ' + err.message, 'danger');
+      }
+    }
+
+    function showAlert(message, type = 'info') {
+      const alertBox = document.getElementById('alert-box');
+      alertBox.className = `alert alert-${type}`;
+      alertBox.innerText = message;
+      alertBox.style.display = 'block';
+
+      clearTimeout(window.alertTimeout);
+      window.alertTimeout = setTimeout(() => {
+        alertBox.style.display = 'none';
+      }, 7000);
+    }
+
+    // Initialize
+    fetchStaffData();
+  </script>
+</body>
+</html>
